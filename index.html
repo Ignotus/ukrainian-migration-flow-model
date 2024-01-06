@@ -1,0 +1,431 @@
+<html>
+  <body>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.6.1/d3.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/topojson/3.0.2/topojson.min.js" integrity="sha512-4UKI/XKm3xrvJ6pZS5oTRvIQGIzZFoXR71rRBb1y2N+PbwAsKa5tPl2J6WvbEvwN3TxQCm8hMzsl/pO+82iRlg==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+<style type="text/css">
+
+
+    svg {
+        background-color: white;
+    }
+
+    h1 {
+        color: rgb(115, 115, 115);
+        font-size: 18px;
+        font-family: sans-serif;
+        font-weight: bold;
+        margin: 0;
+        padding-bottom: 10px;
+
+    }
+
+    #container {
+        width: 800px;
+        margin-left: auto;
+        margin-right: auto;
+        margin-top: 20px;
+        padding: 20px;
+        background-color: white;
+    }
+
+    path:hover {
+        fill: rgba(8, 81, 156, 0.2);
+        cursor:pointer;
+    }
+
+
+
+</style>
+
+<div id="all">
+    <div width=1500>
+        <h2 style="text-align: center;"></h2>
+    </div>
+    <div id="container">
+
+    </div>
+    <div id="plot" style="margin-top:-120;">
+    </div>
+</div>
+
+
+<script type="text/javascript">
+    (function () {
+        //Width and height
+        var w = 750;
+        var h = 600;
+
+        //Define map projection
+        var projection = d3.geoAzimuthalEquidistant()
+                               .center([ 13, 52 ])
+                               .translate([ w/2, h/2 ])
+                               .scale([ w * 1.2 ]);
+
+        //Define path generator
+        var path = d3.geoPath()
+                         .projection(projection);
+
+        let json = null
+        let migration_flow = null
+        let migration_flow_transposed = {}
+        let labels = []
+
+        const parseTime = d3.timeParse("%Y-%m-%d");
+
+        function loadData() {
+            return Promise.all([
+                //Load in GeoJSON data
+                d3.json("europe_features_v2.json"),
+                d3.csv("migration_in_flow.csv"),
+                d3.csv("migration_out_flow.csv")
+            ]).then(datasets => {
+                json = datasets[0]
+                migration_flow = datasets[1]
+                migration_out_flow =  datasets[2]
+
+                function process_flow(flow) {
+                    flow = d3.map(flow, function(x) {
+                        x.date = parseTime(x.date);
+                        return x;
+                    })
+
+                    date = d3.map(flow, d => d.date)
+
+                    flow_transposed = {}
+
+                    d3.map(flow, function(x) {
+                        d = x.date
+                        d3.map(Object.entries(x), function (x) {
+                            [k, v] = x
+
+                            if ((k == "date") || (k == "msg"))
+                                return;
+
+                            if (k in flow_transposed)
+                                flow_transposed[k].push([d, +v])
+                            else {
+                                flow_transposed[k] = [[d, +v]]
+                                labels.push(k)
+                            }
+                        })
+                    })
+
+                    flow_transposed = d3.map(Object.entries(flow_transposed), x => x[1])
+
+                    return flow, flow_transposed
+                }
+
+                migration_flow, migration_flow_transposed = process_flow(migration_flow)
+
+                migration_out_flow, migration_out_flow_transposed = process_flow(migration_out_flow)
+
+                return json;
+            })
+        }
+
+        w = 1500
+        var svg = d3.select("#container")
+            .append("svg")
+            .attr("width", w)
+            .attr("height", h);
+
+        margin = 80
+        height = h / 4
+        width = w - margin * 2
+
+        title2 = d3.select("#plot").append("h3").style("text-align", "center")
+            .text("europe")
+
+        var plot = d3.select("#plot")
+            .append("svg")
+            .attr("width", width + margin * 2)
+            .attr("height", height + 20)
+            .append("g")
+                .attr("transform",
+                      "translate(" + margin + ",0)");
+
+
+        var i = 0
+        var currentCountry = "netherlands"
+        var p = null
+        let duration = 100
+        max_by_country = {}
+
+        function showPlot() {
+            var x = d3.scaleLinear()
+                .domain([new Date("2022-01-29"), d3.extent(d3.map(migration_flow, d => d.date))[1]])
+                .range([ 0, width ]);
+
+            var y = d3.scaleLog()
+                .domain([1, d3.max(d3.map(migration_flow, d => +d.msg))])
+                .range([ height, 0 ]);
+
+            var color = d3.scaleOrdinal()
+                .domain(labels)
+                .range(["#ca74c6",
+                    "#5fba68",
+                    "#5d398b",
+                    "#9cb241",
+                    "#6c81d9",
+                    "#d1972c",
+                    "#b2457c",
+                    "#45c097",
+                    "#ba4a4e",
+                    "#6f8737",
+                    "#ba5a2c",
+                    "#c09047"]);
+
+            p = plot.selectAll('.line')
+                .data(d3.zip(labels, migration_flow_transposed))
+                .enter()
+                .append('path')
+
+            function drawLine(dd) {
+                dd_f = d3.filter(dd[1], d => d[0] < migration_flow[i].date)
+                return d3.line().curve(d3.curveNatural)
+                    .x(d => x(d[0]))
+                    .y(d => y(Math.max(+d[1], 1)))(dd_f)
+            }
+
+            p.attr('fill', 'none')
+                    .attr('stroke', d => color(d[0]))
+                    .attr('stroke-width', 2)
+                    .attr('d', drawLine)
+
+            function add_event(color, text, height, date, offset=0) {
+                plot.append('line')
+                    .attr("x1", x(date))
+                    .attr("y1", 200 - height)
+                    .attr("x2", x(date))
+                    .attr("y2", 200)
+                    .style("stroke", color)
+
+                plot.append("text")
+                    .html(text)
+                    .attr("x", x(date) + 5 + offset)
+                    .attr("y", 200 - height + 10).style("font-size", "15px")
+                    .style('fill', color)
+            }
+
+            add_event("red", "Full scale invasion of Ukraine", 200, new Date('2022-02-24'))
+            add_event("red", "Occupation of Kherson", 180, new Date('2022-03-02'))
+            add_event("blue", "Siege of Mariupol", 180, new Date('2022-05-20'))
+            add_event("blue", "Battle of Irpin", 150, new Date('2022-03-28'))
+            // add_event("blue", "Battle of Enerhodar", 160, new Date('2022-03-04'))
+            add_event("red", "Battle of Izium", 170, new Date('2022-04-01'))
+            add_event("red", "Battle of Lysychansk", 180, new Date('2022-07-03'))
+            add_event("blue", "Kherson counteroffensive", 180, new Date('2022-11-11'), -60)
+            add_event("green", "Sinking of the Moskva", 200, new Date('2022-04-13'))
+            add_event("green", "Crimean Bridge explosion", 200, new Date('2022-10-08'))
+            add_event("red", "DB Strike", 150, new Date('2022-10-17'))
+            add_event("red", "DB Strike", 150, new Date('2022-08-11'))
+
+            plot.append("g")
+                .call(d3.axisLeft(y).ticks(5));
+
+            plot.append("g")
+                .attr("transform", "translate(0," + height + ")")
+                .call(d3.axisBottom(x).ticks(10).tickFormat(d3.timeFormat("%b %Y")))
+
+            plot.append("text")
+                .attr("class", "y label")
+                .attr("text-anchor", "end")
+                .attr('x', -25)
+                .attr("y", -45)
+                .attr("dy", ".75em")
+                .attr("transform", "rotate(-90)")
+                .text("Messages");
+
+            function myLoop() {
+                setTimeout(function () {
+                    p.transition().duration(duration)
+                        .attr("d", drawLine);
+
+                    if (i < migration_flow.length) {
+                        myLoop();
+                    }
+                }, duration)
+            }
+
+            myLoop();
+        }
+
+        function showMap() {
+            var color = d3.scaleLinear()
+                .domain([0, 0.3])
+                .range([d3.rgb("#ffffff"), d3.rgb("#a60000")]);
+
+            h1 = d3.selectAll("h2");
+
+            let max_radius = 400;
+
+            function add_legend() {
+                svg.append("circle").attr("cx",10).attr("cy",130).attr("r", 6).style("fill", "#a60000")
+                svg.append("circle").attr("cx",10).attr("cy",160).attr("r", 6).style("fill", "#005bbb")
+                svg.append("text").attr("x", 30).attr("y", 135).text("UKR -> Europe Sentiment").style("font-size", "15px").attr("alignment-baseline","middle").style("fill", "#a60000")
+                svg.append("text").attr("x", 30).attr("y", 165).text("Europe -> UKR Sentiment").style("font-size", "15px").attr("alignment-baseline","middle").style("fill", "#005bbb")
+
+                svg.append("text").html("&#169; <a href=\"https://www.linkedin.com/in/nlminhtl/\">~PST</a>")
+                    .attr("x",5).attr("y",190)
+            }
+
+            add_legend()
+
+            function color_intensity_factory(data) {
+                function func(d) {
+                    country_name = d.properties.name.toLowerCase()
+
+                    if (country_name in data[i]) {
+                        if (data[i][country_name] < 0.1)
+                            return "#eee"
+                        let num_msg = data[i].msg
+                        return color(data[i][country_name] / +num_msg)
+                    }
+
+                    return "#eee"
+                }
+
+                return func
+            }
+
+            color_intensity = color_intensity_factory(migration_flow)
+            color_intensity_out = color_intensity_factory(migration_out_flow)
+
+
+            function fill(d) {
+                country_name = d.properties.name.toLowerCase()
+                if (country_name == "ukraine")
+                    return "#FFD500"
+
+                h1.text("Migration Sentiment " + migration_flow[i].date.toLocaleDateString("en-US"))
+                return color_intensity(d)
+            }
+
+            function bubble_r_factory(data) {
+                function func(d) {
+                    country_name = d.properties.name.toLowerCase()
+
+                    if (country_name in data[i]) {
+                        if (data[i][country_name] < 0.1)
+                            return 0
+                        let num_msg = data[i].msg
+                        return max_radius * data[i][country_name] / +num_msg
+                    }
+
+                    return 0
+                }
+
+                return func
+            }
+
+            bubble_r = bubble_r_factory(migration_flow)
+            bubble_r_out = bubble_r_factory(migration_out_flow)
+
+            x = svg.selectAll("path")
+               .data(json.features)
+               .enter().append("g")
+
+            y = x.append("path")
+               .attr("d", path)
+               .attr("id", "map-element")
+               .attr("stroke", "#808080")
+
+            function onMouseHover(d) {
+                currentCountry = d.srcElement.__data__.properties.name.toLowerCase()
+
+                title2.text(currentCountry)
+
+                p.style('opacity', function (d) {
+                    if (d[0] == currentCountry)
+                        return 1;
+                    return 0;
+                })
+            }
+
+            y.on("mouseover", onMouseHover)
+
+            function add_bubble(radius_func, intensity_func, opacity, name) {
+                return svg.selectAll(name)
+                   .data(json.features)
+                   .enter()
+                   .append('circle')
+                        .attr('cx', d => path.centroid(d)[0])
+                        .attr('cy', d => path.centroid(d)[1])
+                        .attr('r', radius_func)
+                        .style('opacity', opacity)
+                        .style('fill', intensity_func)
+            }
+
+            bubbles = add_bubble(bubble_r, color_intensity, 0.25, ".circles")
+                .on("mouseover", onMouseHover)
+            bubbles2 = add_bubble(bubble_r_out, color_intensity_out, 0.5, ".circles2")
+
+
+            country = svg.selectAll(".labels")
+                .data(json.features)
+                .enter()
+                .append('text')
+                .attr("x", d => path.centroid(d)[0])
+                .attr("y", d => path.centroid(d)[1])
+                .attr("text-anchor","middle")
+                .style("font", "10px times")
+
+
+            function updateText(d) {
+                country_name = d.properties.name.toLowerCase()
+
+                if ((country_name == "ukraine") || (country_name == "belarus"))
+                    return "";
+
+                if (country_name in migration_flow[i]) {
+                    let num_msg = migration_flow[i].msg
+                    return (migration_flow[i][country_name] / num_msg * 100).toFixed(0) + "%"
+
+                }
+                return "";
+            }
+
+            y.transition().duration(duration)
+                .attr("fill", fill)
+
+            function myLoop() {
+                setTimeout(function () {
+                    i++;
+                    y.transition().duration(duration)
+                        .attr("fill", fill)
+
+                    bubbles.transition().duration(duration)
+                        .attr("r", bubble_r)
+                        .style("fill", "red")
+
+                    bubbles2.transition().duration(duration)
+                        .attr("r", bubble_r_out)
+                        .style("fill", "#005bbb")
+
+                    country.transition().duration(duration)
+                        .text(updateText)
+
+                    if (i < migration_flow.length) {
+                        myLoop();
+                    }
+                }, duration)
+            }
+
+            myLoop();
+        }
+
+        function showAll() {
+            showMap();
+            showPlot();
+        }
+
+
+        loadData().then(showAll);
+    })();
+</script>
+
+
+</script>
+
+  </body>
+</html>
